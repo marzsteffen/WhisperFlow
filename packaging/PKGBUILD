@@ -1,0 +1,54 @@
+pkgname=local-dictation
+pkgver=0.1.0
+pkgrel=5
+pkgdesc='Fully local German push-to-talk dictation for KDE Plasma on Wayland'
+arch=('x86_64')
+license=('MIT')
+depends=(
+  'python'
+  'python-pyqt6'
+  'qt6-wayland'
+  'qt6-svg'
+  'python-evdev'
+  'python-pyudev'
+  'python-requests'
+  'pipewire-audio'
+  'whisper-cpp>=1.9.1'
+  'ggml-vulkan'
+  'vulkan-radeon'
+  'wl-clipboard>=1:2.3.0'
+  'ydotool'
+)
+optdepends=('kdotool: KWin focus guard for experimental direct live text')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+checkdepends=('python-pytest' 'python-pytest-qt')
+install=local-dictation.install
+source=("${pkgname}-${pkgver}.tar.gz")
+sha256sums=('1677cda8b849c62e0e2232188e1a9e1431693a2996deb72d8017d6134ea29bcc')
+
+_source_dir="local_dictation-${pkgver}"
+
+build() {
+  cd "${srcdir}/${_source_dir}"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "${srcdir}/${_source_dir}"
+  QT_QPA_PLATFORM=offscreen pytest -m 'not integration and not live'
+}
+
+package() {
+  cd "${srcdir}/${_source_dir}"
+  python -m installer --destdir="${pkgdir}" dist/*.whl
+  install -Dm644 assets/local-dictation.service \
+    "${pkgdir}/usr/lib/systemd/user/local-dictation.service"
+  install -Dm644 assets/local-dictation-autostart.desktop \
+    "${pkgdir}/etc/xdg/autostart/local-dictation.desktop"
+  install -Dm644 assets/local-dictation.desktop \
+    "${pkgdir}/usr/share/applications/local-dictation.desktop"
+  install -Dm644 assets/local-dictation.svg \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/local-dictation.svg"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/local-dictation/README.md"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/local-dictation/LICENSE"
+}

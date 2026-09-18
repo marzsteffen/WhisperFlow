@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$project_dir"
+if ! python -c 'import build, setuptools, wheel' >/dev/null 2>&1; then
+  echo 'Fehlende Build-Werkzeuge: sudo pacman -S --needed python-build python-setuptools python-wheel' >&2
+  exit 1
+fi
+if ! command -v updpkgsums >/dev/null 2>&1; then
+  echo 'Fehlendes Prüfsummen-Werkzeug: sudo pacman -S --needed pacman-contrib' >&2
+  exit 1
+fi
+
+export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1788566400}
+export LC_ALL=C
+python -m build --sdist --no-isolation
+
+# setuptools creates the authoritative Python sdist contents, but its tar
+# member metadata is not deterministic.  Repack those unchanged contents with
+# fixed ordering, ownership, timestamps, and gzip headers.
+repack_dir=$(mktemp -d /tmp/local-dictation-sdist.XXXXXX)
+trap 'rm -rf -- "$repack_dir"' EXIT
+tar -xzf "dist/local_dictation-0.1.0.tar.gz" -C "$repack_dir"
+tar \
+  --sort=name \
+  --mtime="@$SOURCE_DATE_EPOCH" \
+  --owner=0 \
+  --group=0 \
+  --numeric-owner \
+  --format=ustar \
+  -C "$repack_dir" \
+  -cf - \
+  "local_dictation-0.1.0" \
+  | gzip -n -9 >"packaging/local-dictation-0.1.0.tar.gz.part"
+mv -f \
+  "packaging/local-dictation-0.1.0.tar.gz.part" \
+  "packaging/local-dictation-0.1.0.tar.gz"
+cd packaging
+updpkgsums
+makepkg --verifysource
+sha256sum local-dictation-0.1.0.tar.gz
+echo 'Quellarchiv und PKGBUILD-Prüfsumme sind bereit. Installation: makepkg -Ccfsi'

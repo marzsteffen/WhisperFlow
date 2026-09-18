@@ -1,0 +1,33 @@
+[Unit]
+Description=Lokales deutsches Diktat für KDE Wayland
+Documentation=file:///usr/share/doc/local-dictation/README.md
+After=graphical-session.target pipewire.service wireplumber.service
+PartOf=graphical-session.target
+# Do not grab input when manually started outside a live graphical session.
+Requisite=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/local-dictation --daemon
+Restart=no
+KillMode=control-group
+TimeoutStopSec=5s
+RuntimeDirectory=local-dictation
+RuntimeDirectoryMode=0700
+UMask=0077
+LimitCORE=0
+Environment=QT_QPA_PLATFORM=wayland
+NoNewPrivileges=yes
+# The legacy ydotool.service exposes its owner-checked socket in /tmp.
+# Audio and application temporaries still use the private RuntimeDirectory.
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# AF_NETLINK is required by pyudev for input-device hotplug notifications.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=graphical-session.target

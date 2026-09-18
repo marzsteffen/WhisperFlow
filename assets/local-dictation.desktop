@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Lokales Diktat
+Comment=Deutsches Diktat vollständig lokal mit whisper.cpp
+Exec=local-dictation
+Icon=local-dictation
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=Diktat;Sprache;Whisper;Wayland;
+StartupNotify=false

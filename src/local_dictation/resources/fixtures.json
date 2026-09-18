@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "generator": {
+    "script": "scripts/generate-audio-fixtures",
+    "tts": "espeak-ng 1.52.0",
+    "voice": "de",
+    "resampler": "ffmpeg n9.0.1",
+    "sample_rate": 16000,
+    "channels": 1,
+    "sample_width_bits": 16
+  },
+  "fixtures": {
+    "warmup": {
+      "resource": "warmup-de.wav",
+      "text": "Dies ist ein kurzer deutscher Test für das lokale Diktat.",
+      "frames": 54170,
+      "duration_seconds": 3.385625,
+      "sha256": "05a65bf1c277d6139d4a0baa9cd3915f10e27b602e5be49476797dccf0924525"
+    },
+    "benchmark": {
+      "resource": "benchmark-de.wav",
+      "text": "Grüß Gott. Ich prüfe Äpfel, Öl und süße Grüße. Cachy O S, K D E Plasma, Wayland, PipeWire, PyQt sechs, Whisper Punkt C P P, Vulkan, Radeon acht sechzig M, Claude, Chat G P T und Codex arbeiten vollständig lokal.",
+      "expected_terms": [
+        "Wayland",
+        "Vulkan",
+        "Codex"
+      ],
+      "frames": 239224,
+      "duration_seconds": 14.9515,
+      "sha256": "5675818f5647c7eb01f99f4547399d5cf89cba0b1c55561990c830abc282af3b"
+    }
+  }
+}

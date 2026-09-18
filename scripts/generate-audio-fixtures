@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+resource_dir="$project_dir/src/local_dictation/resources"
+mkdir -p "$resource_dir"
+
+espeak_command=${ESPEAK_NG:-espeak-ng}
+
+for command_name in "$espeak_command" ffmpeg; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "Fehlendes Werkzeug: $command_name" >&2
+    exit 1
+  fi
+done
+
+temporary_wav=$(mktemp --suffix=.wav)
+trap 'rm -f -- "$temporary_wav"' EXIT
+
+generate_fixture() {
+  local output_name=$1
+  local speed=$2
+  local spoken_text=$3
+
+  local -a data_path_argument=()
+  if [[ -n ${ESPEAK_DATA_PATH:-} ]]; then
+    data_path_argument=("--path=$ESPEAK_DATA_PATH")
+  fi
+
+  LC_ALL=C "$espeak_command" \
+    "${data_path_argument[@]}" \
+    -v de \
+    -s "$speed" \
+    -p 45 \
+    -a 160 \
+    --stdout \
+    "$spoken_text" >"$temporary_wav"
+  ffmpeg \
+    -nostdin \
+    -hide_banner \
+    -loglevel error \
+    -y \
+    -i "$temporary_wav" \
+    -map_metadata -1 \
+    -ac 1 \
+    -ar 16000 \
+    -c:a pcm_s16le \
+    -fflags +bitexact \
+    -flags:a +bitexact \
+    "$resource_dir/$output_name"
+}
+
+generate_fixture \
+  "warmup-de.wav" \
+  175 \
+  "Dies ist ein kurzer deutscher Test für das lokale Diktat."
+
+generate_fixture \
+  "benchmark-de.wav" \
+  190 \
+  "Grüß Gott. Ich prüfe Äpfel, Öl und süße Grüße. Cachy O S, K D E Plasma, Wayland, PipeWire, PyQt sechs, Whisper Punkt C P P, Vulkan, Radeon acht sechzig M, Claude, Chat G P T und Codex arbeiten vollständig lokal."
+
+echo "Fixtures erzeugt:"
+sha256sum "$resource_dir/warmup-de.wav" "$resource_dir/benchmark-de.wav"

@@ -1,0 +1,5 @@
+include LICENSE README.md
+recursive-include assets *.desktop *.service *.svg
+include scripts/generate-audio-fixtures
+recursive-include tests *.py
+recursive-include src/local_dictation/resources *.wav *.json

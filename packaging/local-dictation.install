@@ -1,0 +1,23 @@
+post_install() {
+  echo 'Lokales Diktat wurde installiert.'
+  echo 'Für Tastaturzugriff müssen Desktopbenutzer Mitglied der Gruppe input sein.'
+  echo 'Falls die Gruppe neu hinzugefügt wird, ist eine vollständige Ab- und Anmeldung nötig.'
+  echo 'Der KDE-Autostart gilt ab der nächsten Anmeldung.'
+  echo 'Aktuelle Sitzung: systemctl --user daemon-reload && systemctl --user start local-dictation.service'
+  echo 'Beim ersten Start werden das Whisper- und das VAD-Modell mit Fortschrittsanzeige geladen.'
+}
+
+post_upgrade() {
+  echo 'User-Units neu laden und Dienst neu starten:'
+  echo 'systemctl --user daemon-reload && systemctl --user restart local-dictation.service'
+}
+
+pre_remove() {
+  echo 'Bitte den Dienst vor dem Entfernen beenden: systemctl --user stop local-dictation.service'
+}
+
+post_remove() {
+  echo 'Modelle, Benutzerkonfiguration und Diagnosedaten bleiben erhalten.'
+  echo 'Vollständig löschen: vor der Deinstallation local-dictation --purge ausführen,'
+  echo 'oder danach ~/.config/local-dictation und ~/.local/share/local-dictation manuell entfernen.'
+}
