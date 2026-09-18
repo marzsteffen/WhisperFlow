@@ -5,16 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "local-dictation"
 version = "0.1.0"
-description = "Fully local German push-to-talk dictation for KDE Plasma on Wayland"
+description = "Fully local push-to-talk dictation for Windows and Linux"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "local-dictation contributors" }]
 dependencies = [
   "PyQt6>=6.7",
-  "evdev>=1.7",
-  "pyudev>=0.24",
   "requests>=2.31",
+  "evdev-binary>=2.0; platform_system == 'Linux'",
+  "pyudev>=0.24; platform_system == 'Linux'",
+  "keyboard>=0.13.5; platform_system == 'Windows'",
+  "sounddevice>=0.5.1; platform_system == 'Windows'",
+  "pyperclip>=1.9; platform_system == 'Windows'",
 ]
 
 [project.scripts]

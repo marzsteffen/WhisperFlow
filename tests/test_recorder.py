@@ -161,7 +161,8 @@ def test_release_while_qprocess_is_starting_stops_as_soon_as_started(
         assert recording.getsampwidth() == 2
         assert recording.getframerate() == 16_000
         assert recording.readframes(4) == struct.pack("<4h", 1, -2, 3, -4)
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_failed_to_start_reports_once_and_removes_partial_audio(
@@ -404,7 +405,8 @@ def test_wav_snapshot_is_private_exact_and_explicitly_deletable(
     assert snapshot.window_start_ms == 1
     assert snapshot.window_end_ms == 3
     assert snapshot.duration_ms == 2
-    assert stat.S_IMODE(snapshot.path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(snapshot.path.stat().st_mode) == 0o600
     with wave.open(str(snapshot.path), "rb") as recording:
         assert recording.getnchannels() == 1
         assert recording.getsampwidth() == 2
@@ -452,7 +454,7 @@ def test_raw_buffer_is_capped_at_configured_duration(
     recorder = Recorder(tmp_path)
     recorder.start("microphone", 1)
     process = fake_process.instances[-1]
-    expected = bytes((index % 251 for index in range(32_000)))
+    expected = bytes(index % 251 for index in range(32_000))
     process.feed_stdout(expected + b"overflow" * 100)
 
     assert recorder.recorded_frames == 16_000

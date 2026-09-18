@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import MAIN_MODEL_FILENAME, VAD_MODEL_FILENAME, get_models_dir
+from .config import VAD_MODEL_FILENAME, get_models_dir
 
 ProgressCallback = Callable[[int, int], None]
 CancelCheck = Callable[[], bool] | Any
@@ -24,16 +24,43 @@ class ModelSpec:
     sha256: str
 
 
-MAIN_MODEL = ModelSpec(
-    key="main",
-    filename=MAIN_MODEL_FILENAME,
-    url=(
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/"
-        "98aa99a0a9db05ae2342309f5096248665f7cba3/ggml-large-v3-turbo.bin"
+MODEL_REVISION = "98aa99a0a9db05ae2342309f5096248665f7cba3"
+
+
+def _model_spec(key: str, filename: str, size: int, sha256: str) -> ModelSpec:
+    return ModelSpec(
+        key=key,
+        filename=filename,
+        url=f"https://huggingface.co/ggerganov/whisper.cpp/resolve/{MODEL_REVISION}/{filename}",
+        size=size,
+        sha256=sha256,
+    )
+
+
+WHISPER_MODELS: Mapping[str, ModelSpec] = {
+    "tiny": _model_spec(
+        "tiny", "ggml-tiny.bin", 77_691_713,
+        "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
     ),
-    size=1_624_555_275,
-    sha256="1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-)
+    "base": _model_spec(
+        "base", "ggml-base.bin", 147_951_465,
+        "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+    ),
+    "small": _model_spec(
+        "small", "ggml-small.bin", 487_601_967,
+        "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+    ),
+    "medium": _model_spec(
+        "medium", "ggml-medium.bin", 1_533_763_059,
+        "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+    ),
+    "large-v3-turbo": _model_spec(
+        "large-v3-turbo", "ggml-large-v3-turbo.bin", 1_624_555_275,
+        "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+    ),
+}
+
+MAIN_MODEL = WHISPER_MODELS["small"]
 
 VAD_MODEL = ModelSpec(
     key="vad",
@@ -51,9 +78,19 @@ VAD_MODEL = ModelSpec(
 MAIN_MODEL_SPEC = MAIN_MODEL
 VAD_MODEL_SPEC = VAD_MODEL
 MODEL_SPECS: Mapping[str, ModelSpec] = {
-    MAIN_MODEL.key: MAIN_MODEL,
+    **WHISPER_MODELS,
     VAD_MODEL.key: VAD_MODEL,
 }
+
+
+def model_spec_for_path(path: str | os.PathLike[str]) -> ModelSpec | None:
+    """Return the pinned catalog entry selected by a managed filename."""
+
+    filename = Path(path).name.casefold()
+    return next(
+        (spec for spec in WHISPER_MODELS.values() if spec.filename.casefold() == filename),
+        None,
+    )
 
 
 class ModelStoreError(RuntimeError):
@@ -132,10 +169,14 @@ def validate_required_models(
 ) -> tuple[Path, Path]:
     """Validate both pinned models; call this before every engine launch."""
 
-    return (
-        validate_model(model_path, MAIN_MODEL),
-        validate_model(vad_model_path, VAD_MODEL),
-    )
+    selected = model_spec_for_path(model_path)
+    if selected is not None:
+        main = validate_model(model_path, selected)
+    else:
+        main = Path(model_path)
+        if not main.is_file() or main.stat().st_size < 1_000_000:
+            raise ModelMissingError(f"Benutzerdefiniertes Whisper-Modell fehlt: {main}")
+    return (main, validate_model(vad_model_path, VAD_MODEL))
 
 
 def _is_cancelled(cancel: CancelCheck | None) -> bool:
@@ -315,6 +356,7 @@ __all__ = [
     "MODEL_SPECS",
     "VAD_MODEL",
     "VAD_MODEL_SPEC",
+    "WHISPER_MODELS",
     "DownloadCancelled",
     "ModelDownloadError",
     "ModelIntegrityError",
@@ -327,4 +369,5 @@ __all__ = [
     "sha256_file",
     "validate_model",
     "validate_required_models",
+    "model_spec_for_path",
 ]

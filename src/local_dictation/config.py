@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -18,7 +19,7 @@ from typing import Any
 SCHEMA_VERSION = 5
 APP_DIRECTORY = "local-dictation"
 CONFIG_FILENAME = "config.json"
-MAIN_MODEL_FILENAME = "ggml-large-v3-turbo.bin"
+MAIN_MODEL_FILENAME = "ggml-small.bin"
 VAD_MODEL_FILENAME = "ggml-silero-v6.2.0.bin"
 
 DEFAULT_MICROPHONE_ID = "alsa_input.pci-0000_c4_00.6.HiFi__Mic1__source"
@@ -97,10 +98,16 @@ def _xdg_home(variable: str, fallback: Path) -> Path:
 
 
 def get_config_dir() -> Path:
+    if sys.platform == "win32" and "XDG_CONFIG_HOME" not in os.environ:
+        base = os.environ.get("APPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Roaming") / "WhisperFlow"
     return _xdg_home("XDG_CONFIG_HOME", Path.home() / ".config") / APP_DIRECTORY
 
 
 def get_data_dir() -> Path:
+    if sys.platform == "win32" and "XDG_DATA_HOME" not in os.environ:
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "WhisperFlow"
     return _xdg_home("XDG_DATA_HOME", Path.home() / ".local" / "share") / APP_DIRECTORY
 
 

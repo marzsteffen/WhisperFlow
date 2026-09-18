@@ -38,6 +38,17 @@ _SESSION_ID_RE = re.compile(
 )
 
 
+def _owned_by_current_user(info: os.stat_result) -> bool:
+    # Windows ownership is enforced by the user's AppData ACL rather than the
+    # POSIX uid field exposed by pathlib (which is always zero there).
+    return os.name == "nt" or info.st_uid == os.getuid()
+
+
+def _has_public_mode_bits(info: os.stat_result) -> bool:
+    # Windows' synthetic 0666/0777 mode bits do not describe ACL access.
+    return os.name != "nt" and bool(stat.S_IMODE(info.st_mode) & 0o077)
+
+
 class DiagnosticsError(RuntimeError):
     """A diagnostic bundle could not be created, completed, or removed."""
 
@@ -130,6 +141,8 @@ def _atomic_copy(source: Path, destination: Path) -> int:
     destination_descriptor = -1
     temporary: Path | None = None
     try:
+        if source.is_symlink():
+            raise DiagnosticsError("Audio source must not be a symbolic link")
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         source_descriptor = os.open(source, flags)
         source_info = os.fstat(source_descriptor)
@@ -238,9 +251,9 @@ class DiagnosticsArchive:
             raise UnsafeDiagnosticsDirectory(f"{label} is not accessible: {exc}") from exc
         if not stat.S_ISDIR(info.st_mode):
             raise UnsafeDiagnosticsDirectory(f"{label} is not a real directory")
-        if info.st_uid != os.getuid():
+        if not _owned_by_current_user(info):
             raise UnsafeDiagnosticsDirectory(f"{label} is not owned by the current user")
-        if stat.S_IMODE(info.st_mode) & 0o077:
+        if _has_public_mode_bits(info):
             raise UnsafeDiagnosticsDirectory(f"{label} is accessible by other users")
         return info
 
@@ -258,7 +271,7 @@ class DiagnosticsArchive:
             ) from exc
         if not stat.S_ISDIR(info.st_mode):
             raise UnsafeDiagnosticsDirectory("diagnostics path is not a real directory")
-        if info.st_uid != os.getuid():
+        if not _owned_by_current_user(info):
             raise UnsafeDiagnosticsDirectory(
                 "diagnostics directory is not owned by the current user"
             )
@@ -572,9 +585,9 @@ class DiagnosticsArchive:
                 raise UnsafeDiagnosticsDirectory(
                     f"diagnostics entry is not accessible: {exc}"
                 ) from exc
-            if info.st_uid != os.getuid():
+            if not _owned_by_current_user(info):
                 raise UnsafeDiagnosticsDirectory("diagnostics entry has a foreign owner")
-            if stat.S_IMODE(info.st_mode) & 0o077:
+            if _has_public_mode_bits(info):
                 raise UnsafeDiagnosticsDirectory("diagnostics entry is accessible by other users")
             if stat.S_ISDIR(info.st_mode):
                 cls._validate_tree(entry)

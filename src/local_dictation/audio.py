@@ -144,7 +144,7 @@ def validate_wav(
 
 
 def get_runtime_dir() -> Path:
-    """Return the app's private runtime directory without falling back to disk."""
+    """Return the app's private per-user runtime directory."""
 
     systemd_runtime = os.environ.get("RUNTIME_DIRECTORY")
     if systemd_runtime:
@@ -155,6 +155,10 @@ def get_runtime_dir() -> Path:
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime and os.path.isabs(xdg_runtime):
         return Path(xdg_runtime) / "local-dictation"
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else Path(tempfile.gettempdir())
+        return root / "WhisperFlow" / "runtime"
     raise RuntimeDirectoryError(
         "Weder RUNTIME_DIRECTORY noch ein absolutes XDG_RUNTIME_DIR ist gesetzt"
     )

@@ -11,14 +11,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .audio import get_runtime_dir
 from .config import APP_DIRECTORY, get_config_dir, get_data_dir
 
 
 def runtime_dir() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    if not base:
-        raise RuntimeError("XDG_RUNTIME_DIR ist nicht gesetzt")
-    return Path(base) / APP_DIRECTORY
+    return get_runtime_dir()
 
 
 def control_path() -> Path:
@@ -26,6 +24,23 @@ def control_path() -> Path:
 
 
 def _start_service() -> None:
+    if sys.platform == "win32":
+        try:
+            if _request({"command": "status"}, timeout=0.4).get("ok"):
+                return
+        except (OSError, RuntimeError):
+            pass
+        env = dict(os.environ)
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        executable = str(pythonw if pythonw.is_file() else Path(sys.executable))
+        subprocess.Popen(
+            [executable, "-m", "local_dictation", "--daemon"],
+            env=env,
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            close_fds=True,
+        )
+        return
     result = subprocess.run(
         ["systemctl", "--user", "start", "local-dictation.service"],
         capture_output=True,
@@ -39,6 +54,8 @@ def _start_service() -> None:
 
 
 def _request(payload: dict[str, Any], *, timeout: float = 30.0) -> dict[str, Any]:
+    if sys.platform == "win32":
+        return _request_windows(payload, timeout=timeout)
     deadline = time.monotonic() + min(timeout, 30.0)
     path = control_path()
     last_error: OSError | None = None
@@ -79,6 +96,43 @@ def _request(payload: dict[str, Any], *, timeout: float = 30.0) -> dict[str, Any
     return response
 
 
+def _request_windows(payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+    from PyQt6.QtCore import QCoreApplication
+    from PyQt6.QtNetwork import QLocalSocket
+
+    app = QCoreApplication.instance() or QCoreApplication(["whisperflow-cli"])
+    client = QLocalSocket()
+    client.connectToServer(control_path().name)
+    connect_ms = max(100, min(2_000, int(timeout * 1000)))
+    if not client.waitForConnected(connect_ms):
+        raise RuntimeError(f"Dienst antwortet nicht: {client.errorString()}")
+    client.write(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
+    if not client.waitForBytesWritten(connect_ms):
+        client.abort()
+        raise RuntimeError("Anfrage konnte nicht gesendet werden")
+    deadline = time.monotonic() + timeout
+    received = bytearray()
+    while b"\n" not in received and time.monotonic() < deadline:
+        wait_ms = max(1, min(1_000, int((deadline - time.monotonic()) * 1000)))
+        if client.bytesAvailable() or client.waitForReadyRead(wait_ms):
+            received.extend(bytes(client.readAll()))
+            if len(received) > 1_048_576:
+                client.abort()
+                raise RuntimeError("Antwort des Dienstes ist zu groß")
+    client.disconnectFromServer()
+    # Keep the local QCoreApplication referenced until all socket work is done.
+    del app
+    if not received:
+        raise RuntimeError("Dienst hat keine Antwort gesendet")
+    try:
+        response = json.loads(received.partition(b"\n")[0].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Dienst hat eine ungültige Antwort gesendet") from exc
+    if not isinstance(response, dict):
+        raise RuntimeError("Dienst hat eine ungültige Antwort gesendet")
+    return response
+
+
 def _validated_purge_target(path: Path) -> Path:
     if path.name != APP_DIRECTORY or path.is_symlink():
         raise RuntimeError(f"Unsicherer Purge-Pfad wird nicht gelöscht: {path}")
@@ -105,12 +159,13 @@ def purge(*, assume_yes: bool) -> int:
         if answer not in {"j", "ja", "y", "yes"}:
             print("Abgebrochen.")
             return 1
-    subprocess.run(
-        ["systemctl", "--user", "stop", "local-dictation.service"],
-        capture_output=True,
-        timeout=20,
-        check=False,
-    )
+    if sys.platform != "win32":
+        subprocess.run(
+            ["systemctl", "--user", "stop", "local-dictation.service"],
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
     for path in existing:
         if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path)

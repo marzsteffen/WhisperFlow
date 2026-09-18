@@ -7,6 +7,7 @@ import pytest
 from local_dictation.model_store import (
     MAIN_MODEL,
     VAD_MODEL,
+    WHISPER_MODELS,
     DownloadCancelled,
     ModelIntegrityError,
     ModelMissingError,
@@ -56,9 +57,11 @@ def make_spec(payload: bytes) -> ModelSpec:
 
 
 def test_official_specs_are_immutable_and_pinned():
-    assert "98aa99a0a9db05ae2342309f5096248665f7cba3" in MAIN_MODEL.url
-    assert MAIN_MODEL.size == 1_624_555_275
-    assert MAIN_MODEL.sha256 == "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"
+    assert MAIN_MODEL is WHISPER_MODELS["small"]
+    assert set(WHISPER_MODELS) == {"tiny", "base", "small", "medium", "large-v3-turbo"}
+    assert all("98aa99a0a9db05ae2342309f5096248665f7cba3" in spec.url for spec in WHISPER_MODELS.values())
+    assert WHISPER_MODELS["large-v3-turbo"].size == 1_624_555_275
+    assert WHISPER_MODELS["large-v3-turbo"].sha256 == "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"
     assert "9ffd54a1e1ee413ddf265af9913beaf518d1639b" in VAD_MODEL.url
     assert VAD_MODEL.size == 885_098
     assert VAD_MODEL.sha256 == "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"

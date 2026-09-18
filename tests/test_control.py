@@ -36,7 +36,7 @@ def spin_until(predicate: object, timeout: float = 1.5) -> None:
 
 def connect(path: Path) -> QLocalSocket:
     socket = QLocalSocket()
-    socket.connectToServer(str(path))
+    socket.connectToServer(path.name if os.name == "nt" else str(path))
     spin_until(lambda: socket.state() == QLocalSocket.LocalSocketState.ConnectedState)
     return socket
 
@@ -57,7 +57,8 @@ def test_control_socket_is_owner_only_and_accepts_fragmented_json(tmp_path: Path
     server = ControlServer(path, handler)
     server.listen()
     try:
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        if os.name != "nt":
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
         socket = connect(path)
         socket.write(b'{"command":"sta')
         socket.flush()
@@ -70,7 +71,7 @@ def test_control_socket_is_owner_only_and_accepts_fragmented_json(tmp_path: Path
         assert requests == [{"command": "status"}]
     finally:
         server.close()
-    assert not path.exists()
+    assert os.name == "nt" or not path.exists()
 
 
 def test_control_socket_supports_a_delayed_worker_reply(tmp_path: Path) -> None:

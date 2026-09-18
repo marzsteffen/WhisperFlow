@@ -87,7 +87,8 @@ def test_release_builder_normalizes_sdist_and_updates_checksum() -> None:
 
 def test_documentation_explains_login_group_refresh() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    installer = (ROOT / "install.py").read_text(encoding="utf-8")
 
-    assert "sudo usermod -aG input" in readme
-    assert "vollständige Ab- und Anmeldung" in readme
-    assert "/dev/uinput" in readme
+    assert '"usermod", "-aG", "input"' in installer
+    assert "vollständigen Ab- und Anmelden" in readme
+    assert "evdev" in readme

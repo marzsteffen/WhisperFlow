@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -31,17 +32,18 @@ from .engine import (
     EngineConfig,
     WhisperEngine,
 )
-from .input_proxy import InputProxyHandle, spawn_input_proxy
-from .insertion import InsertionBackend, InsertionResult, RevisionResult
+from .input_proxy import InputProxyHandle
+from .insertion import InsertionResult, RevisionResult
 from .microphones import Microphone, list_microphones
 from .model_store import (
     MAIN_MODEL,
     VAD_MODEL,
     DownloadCancelled,
     ModelStore,
+    model_spec_for_path,
     validate_required_models,
 )
-from .recorder import Recorder
+from .platform_backend import create_input_proxy, create_insertion_backend, create_recorder
 from .session import SessionMonitor
 from .state import DictationState, DictationStateMachine, EngineState
 from .text import normalize_transcript
@@ -89,7 +91,7 @@ class DictationController(QObject):
         config: AppConfig,
         runtime_dir: Path,
         *,
-        input_factory: Callable[..., InputProxyHandle] = spawn_input_proxy,
+        input_factory: Callable[..., InputProxyHandle] = create_input_proxy,
         engine_factory: Callable[[EngineConfig], WhisperEngine] = WhisperEngine,
         thread_pool: QThreadPool | None = None,
     ) -> None:
@@ -104,8 +106,8 @@ class DictationController(QObject):
         self.machine = DictationStateMachine()
         self.engine_state = EngineState.MISSING_MODELS
         self.engine: WhisperEngine | None = None
-        self.recorder = Recorder(runtime_dir, self)
-        self.insertion = InsertionBackend(runtime_dir)
+        self.recorder = create_recorder(runtime_dir, self)
+        self.insertion = create_insertion_backend(runtime_dir)
         self.diagnostics = DiagnosticsArchive(
             max_entries=config.diagnostics.retention_entries
         )
@@ -116,6 +118,7 @@ class DictationController(QObject):
 
         self.input: InputProxyHandle | None = None
         self._input_notifier: QSocketNotifier | None = None
+        self._input_poll_timer: QTimer | None = None
         self._input_requested = False
         self._input_ready = False
         self._input_failure = ""
@@ -211,10 +214,16 @@ class DictationController(QObject):
             self._locked = False
         try:
             self.input = self._input_factory()
-            self._input_notifier = QSocketNotifier(
-                self.input.events.fileno(), QSocketNotifier.Type.Read, self
-            )
-            self._input_notifier.activated.connect(self._drain_input_events)
+            if sys.platform == "win32":
+                self._input_poll_timer = QTimer(self)
+                self._input_poll_timer.setInterval(30)
+                self._input_poll_timer.timeout.connect(self._drain_input_events)
+                self._input_poll_timer.start()
+            else:
+                self._input_notifier = QSocketNotifier(
+                    self.input.events.fileno(), QSocketNotifier.Type.Read, self
+                )
+                self._input_notifier.activated.connect(self._drain_input_events)
             self._heartbeat_timer.start()
         except Exception as exc:
             self._input_failure = f"Input-Proxy konnte nicht gestartet werden: {exc}"
@@ -963,7 +972,9 @@ class DictationController(QObject):
             def finalize_live_text() -> InsertionResult:
                 if cancel.is_set():
                     return InsertionResult(False, False, "Einfügen wurde abgebrochen")
-                revision_cancelled = lambda: cancel.is_set() or field_cancel.is_set()
+                def revision_cancelled() -> bool:
+                    return cancel.is_set() or field_cancel.is_set()
+
                 revision: RevisionResult | None = None
                 if can_revise and target is not None:
                     revision = self.insertion.revise(
@@ -1198,10 +1209,11 @@ class DictationController(QObject):
                     validate_required_models(snapshot.model_path, snapshot.vad_model_path)
                 except Exception:
                     bridge.download_started.emit()
+                    selected_spec = model_spec_for_path(snapshot.model_path) or MAIN_MODEL
                     main_path = store.download(
-                        MAIN_MODEL,
+                        selected_spec,
                         progress=lambda done, total: bridge.download_progress.emit(
-                            MAIN_MODEL.filename, done, total
+                            selected_spec.filename, done, total
                         ),
                         cancel=cancel,
                         force=force_download,
@@ -1223,7 +1235,13 @@ class DictationController(QObject):
                     raise DownloadCancelled("Engine-Neustart wurde abgebrochen")
 
                 bridge.phase.emit("Engine und Modelle werden geladen …")
-                engine_config = EngineConfig.from_app_config(effective, self.runtime_dir)
+                bundled = get_models_dir().parent / "bin" / (
+                    "whisper-server.exe" if sys.platform == "win32" else "whisper-server"
+                )
+                overrides = {"executable": str(bundled)} if bundled.is_file() else {}
+                engine_config = EngineConfig.from_app_config(
+                    effective, self.runtime_dir, **overrides
+                )
                 new_engine = self._engine_factory(engine_config)
                 warmup = self._resource_path("warmup-de.wav")
                 new_engine.start(
@@ -1836,6 +1854,9 @@ class DictationController(QObject):
                 pass
         if self._input_notifier is not None:
             self._input_notifier.setEnabled(False)
+        input_poll_timer = getattr(self, "_input_poll_timer", None)
+        if input_poll_timer is not None:
+            input_poll_timer.stop()
         self.recorder.shutdown()
         if self.engine is not None:
             self.engine.cancel_pending()

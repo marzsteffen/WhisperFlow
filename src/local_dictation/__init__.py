@@ -1,4 +1,4 @@
-"""Local German dictation for KDE Plasma on Wayland."""
+"""WhisperFlow: local push-to-talk dictation for Windows and Linux."""
 
 __version__ = "0.1.0"
 

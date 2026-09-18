@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import wave
 from array import array
 from pathlib import Path
@@ -75,17 +76,22 @@ def test_temporary_audio_is_private_and_removed_on_error(tmp_path):
         captured = path
         assert path.exists()
         assert path.parent == tmp_path
-        assert path.stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert path.stat().st_mode & 0o777 == 0o600
         raise RuntimeError("transcription failed")
     assert captured is not None
     assert not captured.exists()
 
 
-def test_runtime_directory_never_falls_back_to_persistent_temp(monkeypatch, tmp_path):
+def test_runtime_directory_uses_platform_private_location(monkeypatch, tmp_path):
     monkeypatch.delenv("RUNTIME_DIRECTORY", raising=False)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     assert get_runtime_dir() == tmp_path / "local-dictation"
     monkeypatch.delenv("XDG_RUNTIME_DIR")
-    with pytest.raises(RuntimeDirectoryError):
-        get_runtime_dir()
+    if os.name == "nt":
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert get_runtime_dir() == tmp_path / "WhisperFlow" / "runtime"
+    else:
+        with pytest.raises(RuntimeDirectoryError):
+            get_runtime_dir()
 

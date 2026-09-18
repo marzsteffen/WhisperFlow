@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -132,7 +133,7 @@ def test_diagnostics_are_opt_in_with_private_path_and_bounded_retention() -> Non
     assert dialog.diagnostics_retention.minimum() == 1
     assert dialog.diagnostics_retention.maximum() == 100
     assert dialog.diagnostics_retention.value() == 20
-    assert dialog.diagnostics_path.text().endswith("/local-dictation/diagnostics")
+    assert Path(dialog.diagnostics_path.text()).name == "diagnostics"
     notice = dialog.diagnostics_notice.text()
     assert "Audio-WAV" in notice
     assert "Transkript" in notice

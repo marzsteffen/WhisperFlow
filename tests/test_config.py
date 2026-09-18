@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 
 import pytest
@@ -35,7 +36,7 @@ def test_defaults_use_xdg_paths_and_exact_schema(monkeypatch, tmp_path):
         "schema_version": SCHEMA_VERSION,
         "enabled": True,
         "microphone_id": DEFAULT_MICROPHONE_ID,
-        "model_path": str(get_models_dir() / "ggml-large-v3-turbo.bin"),
+        "model_path": str(get_models_dir() / "ggml-small.bin"),
         "vad_model_path": str(get_models_dir() / "ggml-silero-v6.2.0.bin"),
         "language": "de",
         "trigger": "KEY_RIGHTCTRL",
@@ -63,7 +64,8 @@ def test_save_is_atomic_private_and_round_trips(tmp_path):
     config = default_config()
 
     assert save_config(config, path) == path
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert not list(path.parent.glob(".config.json.*.tmp"))
     assert load_config(path) == config
     assert json.loads(path.read_text(encoding="utf-8")) == config.to_dict()

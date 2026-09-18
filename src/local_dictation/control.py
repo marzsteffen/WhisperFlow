@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -34,13 +35,15 @@ class ControlServer(QObject):
                 self.path.unlink()
         except OSError:
             pass
-        if not self.server.listen(str(self.path)):
+        listen_name = self.path.name if sys.platform == "win32" else str(self.path)
+        if not self.server.listen(listen_name):
             raise RuntimeError(f"Control-Socket konnte nicht geöffnet werden: {self.server.errorString()}")
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            self.server.close()
-            raise
+        if sys.platform != "win32":
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:
+                self.server.close()
+                raise
 
     def _accept(self) -> None:
         while socket := self.server.nextPendingConnection():

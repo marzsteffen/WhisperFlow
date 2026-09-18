@@ -4,6 +4,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 import local_dictation.insertion as insertion_module
 from local_dictation.insertion import (
     InsertionBackend,
@@ -12,8 +14,12 @@ from local_dictation.insertion import (
 )
 
 WINDOW = "{01234567-89ab-cdef-0123-456789abcdef}"
+requires_unix_sockets = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"), reason="Linux Unix-domain socket test"
+)
 
 
+@requires_unix_sockets
 def test_find_socket_accepts_live_owned_unix_datagram(tmp_path: Path) -> None:
     socket_path = tmp_path / "ydotool-dgram.sock"
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as daemon:
@@ -27,6 +33,7 @@ def test_find_socket_accepts_live_owned_unix_datagram(tmp_path: Path) -> None:
         assert backend.find_socket() == socket_path
 
 
+@requires_unix_sockets
 def test_live_owned_unix_stream_is_rejected(tmp_path: Path) -> None:
     socket_path = tmp_path / "ydotool-stream.sock"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as daemon:
@@ -37,6 +44,7 @@ def test_live_owned_unix_stream_is_rejected(tmp_path: Path) -> None:
         assert not InsertionBackend._socket_is_safe(socket_path)
 
 
+@requires_unix_sockets
 def test_symlink_to_live_owned_unix_datagram_is_rejected(tmp_path: Path) -> None:
     socket_path = tmp_path / "real-ydotool.sock"
     link_path = tmp_path / "linked-ydotool.sock"
@@ -49,6 +57,7 @@ def test_symlink_to_live_owned_unix_datagram_is_rejected(tmp_path: Path) -> None
         assert not InsertionBackend._socket_is_safe(link_path)
 
 
+@requires_unix_sockets
 def test_live_owned_unix_datagram_with_group_bits_is_rejected(tmp_path: Path) -> None:
     socket_path = tmp_path / "permissive-ydotool.sock"
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as daemon:
@@ -58,6 +67,7 @@ def test_live_owned_unix_datagram_with_group_bits_is_rejected(tmp_path: Path) ->
         assert not InsertionBackend._socket_is_safe(socket_path)
 
 
+@requires_unix_sockets
 def test_stale_unix_datagram_socket_is_rejected(tmp_path: Path) -> None:
     socket_path = tmp_path / "stale-ydotool.sock"
     daemon = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -69,6 +79,7 @@ def test_stale_unix_datagram_socket_is_rejected(tmp_path: Path) -> None:
     assert not InsertionBackend._socket_is_safe(socket_path)
 
 
+@requires_unix_sockets
 def test_live_unix_datagram_owned_by_another_uid_is_rejected(
     tmp_path: Path, monkeypatch
 ) -> None:

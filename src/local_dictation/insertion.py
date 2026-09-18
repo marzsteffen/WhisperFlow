@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 CLIPBOARD_SETTLE_SECONDS = 0.05
 PASTE_DELIVERY_SECONDS = 0.10
 KWIN_QUERY_TIMEOUT_SECONDS = 0.5

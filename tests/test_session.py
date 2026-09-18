@@ -69,6 +69,7 @@ def fake_dbus(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeInterface.next_arguments = [True]
     monkeypatch.setattr(session_module, "QDBusConnection", FakeConnectionFactory)
     monkeypatch.setattr(session_module, "QDBusInterface", FakeInterface)
+    monkeypatch.setattr(session_module.sys, "platform", "linux")
 
 
 def test_monitor_subscribes_to_lock_and_suspend_signals(fake_dbus: None) -> None:

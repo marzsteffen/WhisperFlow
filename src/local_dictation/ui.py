@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QObject, QPropertyAnimation, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -29,6 +30,36 @@ from PyQt6.QtWidgets import (
 
 from .config import AppConfig, DiagnosticsConfig, LiveConfig, RecordingConfig, get_data_dir
 from .microphones import Microphone
+from .model_store import WHISPER_MODELS
+
+APP_STYLESHEET = """
+QWidget { color: #e8edf6; font-family: "Segoe UI", "Inter", sans-serif; font-size: 14px; }
+QDialog, QMenu { background: #10131a; }
+QGroupBox { border: 1px solid #2a3140; border-radius: 14px; margin-top: 14px; padding: 14px; font-weight: 650; }
+QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 7px; color: #9fb6ff; }
+QLineEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+  background: #191e28; border: 1px solid #343d50; border-radius: 9px; padding: 8px; selection-background-color: #6d7cff;
+}
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #7c8cff; }
+QPushButton { background: #252c3a; border: 1px solid #3b465c; border-radius: 9px; padding: 8px 14px; font-weight: 600; }
+QPushButton:hover { background: #30394b; border-color: #7183ff; }
+QPushButton:pressed { background: #1e2430; }
+QPushButton:default { background: #6577f3; border-color: #8795ff; color: white; }
+QCheckBox { spacing: 9px; }
+QCheckBox::indicator { width: 18px; height: 18px; }
+QProgressBar { background: #1b202a; border: 0; border-radius: 6px; height: 12px; text-align: center; }
+QProgressBar::chunk { background: #7183ff; border-radius: 6px; }
+QMenu { border: 1px solid #31394a; padding: 6px; }
+QMenu::item { border-radius: 7px; padding: 7px 24px; }
+QMenu::item:selected { background: #2b3447; }
+"""
+
+
+def apply_theme(app: QApplication) -> None:
+    """Apply the exact same modern visual system on Linux and Windows."""
+
+    app.setStyle("Fusion")
+    app.setStyleSheet(APP_STYLESHEET)
 
 
 def status_icon(color: str = "#3daee9") -> QIcon:
@@ -81,6 +112,9 @@ class Overlay(QWidget):
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade.setDuration(180)
+        self._fade.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def show_message(self, message: str, *, kind: str, timeout_ms: int = 0) -> None:
         colors = {
@@ -98,8 +132,13 @@ class Overlay(QWidget):
         if screen is not None:
             area = screen.availableGeometry()
             self.move(area.center().x() - self.width() // 2, area.bottom() - self.height() - 36)
+        self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
+        self._fade.stop()
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
         if timeout_ms:
             self._hide_timer.start(timeout_ms)
         else:
@@ -111,7 +150,7 @@ class DownloadDialog(QDialog):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Lokales Diktat – Modelle")
+        self.setWindowTitle("WhisperFlow – Modelle")
         self.setModal(False)
         self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
@@ -151,7 +190,7 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self._config = config
-        self.setWindowTitle("Lokales Diktat – Einstellungen")
+        self.setWindowTitle("WhisperFlow – Einstellungen")
         self.setMinimumSize(620, 620)
         outer = QVBoxLayout(self)
         form = QFormLayout()
@@ -159,6 +198,17 @@ class SettingsDialog(QDialog):
         self.enabled = QCheckBox("Rechte Strg-Taste für Diktat reservieren")
         self.enabled.setChecked(config.enabled)
         self.microphone = QComboBox()
+        self.model_choice = QComboBox()
+        model_labels = {
+            "tiny": "Tiny · sehr schnell · 75 MB",
+            "base": "Base · schnell · 142 MB",
+            "small": "Small · empfohlen · 465 MB",
+            "medium": "Medium · genauer · 1,5 GB",
+            "large-v3-turbo": "Large v3 Turbo · höchste Qualität · 1,6 GB",
+        }
+        for key, spec in WHISPER_MODELS.items():
+            self.model_choice.addItem(model_labels[key], spec.filename)
+        self.model_choice.addItem("Eigene GGML-Datei", "custom")
         self.backend = QComboBox()
         self.backend.addItem("Vulkan (Radeon 860M)", "vulkan")
         self.backend.addItem("CPU (expliziter Fallback)", "cpu")
@@ -167,6 +217,12 @@ class SettingsDialog(QDialog):
         self.prompt.setAcceptRichText(False)
         self.prompt.setMaximumHeight(130)
         self.model_path = QLineEdit(config.model_path)
+        selected_model = next(
+            (spec.filename for spec in WHISPER_MODELS.values() if spec.filename == Path(config.model_path).name),
+            "custom",
+        )
+        self.model_choice.setCurrentIndex(max(0, self.model_choice.findData(selected_model)))
+        self.model_choice.currentIndexChanged.connect(self._model_selected)
         self.vad_model_path = QLineEdit(config.vad_model_path)
         self.min_duration = QSpinBox()
         self.min_duration.setRange(1, 300_000)
@@ -241,6 +297,7 @@ class SettingsDialog(QDialog):
         form.addRow("Bereitschaft", self.enabled)
         form.addRow("Mikrofon", self.microphone)
         form.addRow("Backend", self.backend)
+        form.addRow("Sprachmodell", self.model_choice)
         form.addRow("Fachwörter / Initial-Prompt", self.prompt)
         form.addRow("Whisper-Modell", self._path_row(self.model_path))
         form.addRow("VAD-Modell", self._path_row(self.vad_model_path))
@@ -304,6 +361,13 @@ class SettingsDialog(QDialog):
         selected, _ = QFileDialog.getOpenFileName(self, "GGML-Modell wählen", edit.text(), "GGML (*.bin)")
         if selected:
             edit.setText(selected)
+            if edit is self.model_path:
+                self.model_choice.setCurrentIndex(self.model_choice.findData("custom"))
+
+    def _model_selected(self) -> None:
+        filename = self.model_choice.currentData()
+        if filename and filename != "custom":
+            self.model_path.setText(str(get_data_dir() / "models" / str(filename)))
 
     def set_microphones(self, microphones: list[Microphone], selected: str) -> None:
         self.microphone.clear()
@@ -367,7 +431,7 @@ class SettingsDialog(QDialog):
             return
         microphone_id = self.microphone.currentData()
         if not microphone_id:
-            QMessageBox.warning(self, "Kein Mikrofon", "Bitte ein PipeWire-Mikrofon auswählen.")
+            QMessageBox.warning(self, "Kein Mikrofon", "Bitte ein Mikrofon auswählen.")
             return
         if self.max_duration.value() * 1000 < self.min_duration.value():
             QMessageBox.warning(
@@ -418,7 +482,7 @@ class Tray(QObject):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.icon = QSystemTrayIcon(status_icon(), self)
-        self.icon.setToolTip("Lokales Diktat")
+        self.icon.setToolTip("WhisperFlow")
         self.menu = QMenu()
         self.ready_action = self.menu.addAction("Status: wird gestartet …")
         self.ready_action.setEnabled(False)
@@ -462,7 +526,7 @@ class Tray(QObject):
         self.ready_action.setText(f"Status: {ready}")
         self.model_action.setText(f"Modell: {model}")
         self.icon.setIcon(status_icon(color))
-        self.icon.setToolTip(f"Lokales Diktat – {ready}")
+        self.icon.setToolTip(f"WhisperFlow – {ready}")
 
     def set_last_available(self, available: bool) -> None:
         self.copy_action.setEnabled(available)

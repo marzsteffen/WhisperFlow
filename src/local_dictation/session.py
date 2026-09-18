@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+import sys
+
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusInterface
 
 
@@ -10,6 +12,13 @@ class SessionMonitor(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        if sys.platform == "win32":
+            self._last_windows_lock = self.currently_locked()
+            self._windows_timer = QTimer(self)
+            self._windows_timer.setInterval(1000)
+            self._windows_timer.timeout.connect(self._poll_windows_lock)
+            self._windows_timer.start()
+            return
         session = QDBusConnection.sessionBus()
         session.connect(
             "org.freedesktop.ScreenSaver",
@@ -35,6 +44,17 @@ class SessionMonitor(QObject):
         )
 
     def currently_locked(self) -> bool:
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                desktop = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0100)
+                if not desktop:
+                    return True
+                ctypes.windll.user32.CloseDesktop(desktop)
+                return False
+            except Exception:
+                return False
         interface = QDBusInterface(
             "org.freedesktop.ScreenSaver",
             "/ScreenSaver",
@@ -44,6 +64,12 @@ class SessionMonitor(QObject):
         reply = interface.call("GetActive")
         args = reply.arguments()
         return bool(args[0]) if args else False
+
+    def _poll_windows_lock(self) -> None:
+        locked = self.currently_locked()
+        if locked != self._last_windows_lock:
+            self._last_windows_lock = locked
+            self.locked_changed.emit(locked)
 
     @pyqtSlot(bool, name="on_locked_changed")
     def _on_locked_changed(self, locked: bool) -> None:

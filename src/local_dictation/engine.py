@@ -404,7 +404,7 @@ class WhisperEngine:
                         stderr=subprocess.PIPE,
                         shell=False,
                         close_fds=True,
-                        start_new_session=True,
+                        start_new_session=os.name != "nt",
                         bufsize=0,
                     )
                 except FileNotFoundError as exc:
@@ -801,7 +801,7 @@ class WhisperEngine:
         if process is not None and process.poll() is None:
             try:
                 process.send_signal(signal.SIGINT)
-            except (OSError, ProcessLookupError):
+            except (OSError, ProcessLookupError, ValueError):
                 pass
             if not self._wait_process(process, self.config.shutdown_timeout_s):
                 try:

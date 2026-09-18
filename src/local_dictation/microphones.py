@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,7 +36,36 @@ def _is_muted(object_id: int, *, runner=subprocess.run) -> bool | None:
     return "[MUTED]" in result.stdout.upper()
 
 
-def list_microphones(*, runner=subprocess.run) -> list[Microphone]:
+def _list_windows_microphones(sounddevice_module: Any | None = None) -> list[Microphone]:
+    try:
+        sd = sounddevice_module
+        if sd is None:
+            import sounddevice as sd
+    except ImportError as exc:
+        raise MicrophoneError("Das Windows-Audiomodul sounddevice fehlt") from exc
+    try:
+        devices = sd.query_devices()
+    except Exception as exc:
+        raise MicrophoneError(f"Windows-Mikrofone konnten nicht ermittelt werden: {exc}") from exc
+    microphones = []
+    for index, device in enumerate(devices):
+        channels = int(device.get("max_input_channels", 0))
+        if channels < 1:
+            continue
+        microphones.append(
+            Microphone(
+                node_name=str(index),
+                description=str(device.get("name") or f"Mikrofon {index}"),
+                object_id=index,
+                muted=None,
+            )
+        )
+    return microphones
+
+
+def list_microphones(*, runner=subprocess.run, sounddevice_module: Any | None = None) -> list[Microphone]:
+    if sys.platform == "win32" and runner is subprocess.run:
+        return _list_windows_microphones(sounddevice_module)
     try:
         result = runner(
             ["pw-dump"], capture_output=True, text=True, timeout=5, check=False

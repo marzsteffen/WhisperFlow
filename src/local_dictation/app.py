@@ -1,8 +1,7 @@
-"""Process entry point for the KDE user service."""
+"""Cross-platform process entry point for WhisperFlow."""
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
 import signal
@@ -15,15 +14,25 @@ from PyQt6.QtWidgets import QApplication
 from .audio import get_runtime_dir
 from .config import ConfigError, get_config_path, load_config, save_config
 from .controller import DictationController
+from .ui import apply_theme
 
 
 def _acquire_instance_lock(runtime_dir: Path) -> int:
     runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     runtime_dir.chmod(0o700)
     path = runtime_dir / "instance.lock"
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o600)
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         os.close(descriptor)
         raise RuntimeError("local-dictation läuft in dieser Sitzung bereits") from None
@@ -47,10 +56,11 @@ def run_daemon() -> int:
         return 1
 
     app = QApplication(["local-dictation"])
-    app.setApplicationName("Lokales Diktat")
-    app.setApplicationDisplayName("Lokales Diktat")
+    app.setApplicationName("WhisperFlow")
+    app.setApplicationDisplayName("WhisperFlow")
     app.setDesktopFileName("local-dictation")
     app.setQuitOnLastWindowClosed(False)
+    apply_theme(app)
     controller = DictationController(app, config, runtime_dir)
     app.aboutToQuit.connect(controller.shutdown)
 
@@ -64,6 +74,8 @@ def run_daemon() -> int:
 
     try:
         controller.start()
+        if os.environ.pop("WHISPERFLOW_SHOW_SETTINGS", "") == "1":
+            QTimer.singleShot(1200, controller.show_settings)
         return app.exec()
     except Exception as exc:
         logging.getLogger(__name__).exception("Start fehlgeschlagen: %s", exc)

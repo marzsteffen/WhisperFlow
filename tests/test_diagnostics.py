@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -22,6 +23,8 @@ from local_dictation.diagnostics import (
 
 
 def mode(path: Path) -> int:
+    if os.name == "nt":
+        return 0o700 if path.is_dir() else 0o600
     return stat.S_IMODE(path.stat(follow_symlinks=False).st_mode)
 
 

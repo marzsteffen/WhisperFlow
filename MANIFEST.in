@@ -1,5 +1,7 @@
 include LICENSE README.md
+include install.py install.ps1 install.sh
 recursive-include assets *.desktop *.service *.svg
+recursive-include docs *.md
 include scripts/generate-audio-fixtures
 recursive-include tests *.py
 recursive-include src/local_dictation/resources *.wav *.json
