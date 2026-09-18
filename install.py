@@ -8,6 +8,7 @@ available before PyQt and the application dependencies have been installed.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import http.server
 import json
 import os
@@ -19,12 +20,17 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
+import urllib.error
 import urllib.request
 import venv
 import webbrowser
 import zipfile
 from pathlib import Path
 from typing import Any
+
+import hardware
+from hardware import recommend_model
 
 ROOT = Path(__file__).resolve().parent
 TOKEN = secrets.token_urlsafe(24)
@@ -114,35 +120,80 @@ def run(command: list[str], *, timeout: int = 900, check: bool = True) -> subpro
     return result
 
 
+DOWNLOAD_ATTEMPTS = 5
+
+
+def _integrity_hash(path: Path, expected_size: int, expected_hash: str) -> bool:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest() if expected_size < 20_000_000 else file_hash(path)
+    return digest == expected_hash
+
+
 def download(url: str, destination: Path, expected_size: int, expected_hash: str, label: str, start: int, span: int) -> Path:
-    if destination.is_file() and destination.stat().st_size == expected_size:
-        digest = hashlib.sha256(destination.read_bytes()).hexdigest() if expected_size < 20_000_000 else file_hash(destination)
-        if digest == expected_hash:
-            update(progress=start + span, detail=f"{label} ist bereits geprüft.")
-            return destination
+    if destination.is_file() and destination.stat().st_size == expected_size and _integrity_hash(destination, expected_size, expected_hash):
+        update(progress=start + span, detail=f"{label} ist bereits geprüft.")
+        return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.name + ".part")
-    partial.unlink(missing_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "WhisperFlow-Installer/1"})
-    digest = hashlib.sha256()
-    received = 0
+    offset = _partial_size(partial, expected_size)
+    last_error: Exception | None = None
     update(detail=f"{label} wird heruntergeladen …", progress=start)
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response, partial.open("wb") as output:
-            while block := response.read(1024 * 1024):
-                output.write(block)
-                digest.update(block)
-                received += len(block)
-                update(
-                    progress=start + int(span * min(received, expected_size) / expected_size),
-                    detail=f"{label}: {received / 1024**2:.0f} von {expected_size / 1024**2:.0f} MB",
-                )
-        if received != expected_size or digest.hexdigest() != expected_hash:
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        headers = {"User-Agent": "WhisperFlow-Installer/1"}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        resumed_from = offset
+        received = 0
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=60) as response:
+                if resumed_from and response.status == 200:
+                    offset = 0
+                    resumed_from = 0
+                mode = "ab" if offset else "wb"
+                with partial.open(mode) as output:
+                    if not offset:
+                        output.truncate(0)
+                    while block := response.read(1024 * 1024):
+                        output.write(block)
+                        received += len(block)
+                        update(
+                            progress=start + int(span * min(offset + received, expected_size) / expected_size),
+                            detail=f"{label}: {(offset + received) / 1024**2:.0f} von {expected_size / 1024**2:.0f} MB",
+                        )
+        except (urllib.error.URLError, http.client.IncompleteRead, OSError) as exc:
+            last_error = exc
+            offset = _partial_size(partial, expected_size)
+            if attempt < DOWNLOAD_ATTEMPTS:
+                if offset:
+                    update(detail=f"Verbindung unterbrochen – Download wird bei {offset / 1024**2:.0f} MB fortgesetzt …")
+                else:
+                    update(detail="Verbindung unterbrochen – Download wird erneut gestartet …")
+                time.sleep(min(2**attempt, 15))
+            continue
+        if partial.stat().st_size != expected_size:
+            last_error = RuntimeError(f"Unvollständiger Download ({label})")
+            offset = _partial_size(partial, expected_size)
+            continue
+        if not _integrity_hash(partial, expected_size, expected_hash):
+            if resumed_from:
+                partial.unlink(missing_ok=True)
+                offset = 0
+                continue
             raise RuntimeError(f"Integritätsprüfung für {label} fehlgeschlagen")
         os.replace(partial, destination)
         return destination
-    finally:
+    detail = str(last_error) if last_error else "unbekannter Fehler"
+    raise RuntimeError(f"Download von {label} nach {DOWNLOAD_ATTEMPTS} Versuchen fehlgeschlagen: {detail}")
+
+
+def _partial_size(partial: Path, expected_size: int) -> int:
+    if not partial.is_file():
+        return 0
+    size = partial.stat().st_size
+    if size > expected_size:
         partial.unlink(missing_ok=True)
+        return 0
+    return size
 
 
 def file_hash(path: Path) -> str:
@@ -258,7 +309,7 @@ def install_linux_prerequisites() -> None:
             update(needs_relogin=True, detail="Die Eingaberechte gelten nach einmaligem Ab- und Anmelden.")
 
 
-def write_config(targets: dict[str, Path], model_filename: str) -> None:
+def write_config(targets: dict[str, Path], model_filename: str, backend: str = "cpu") -> None:
     targets["config"].mkdir(parents=True, exist_ok=True)
     config = {
         "schema_version": 5,
@@ -268,7 +319,7 @@ def write_config(targets: dict[str, Path], model_filename: str) -> None:
         "vad_model_path": str(targets["models"] / VAD[0]),
         "language": "de",
         "trigger": "KEY_RIGHTCTRL",
-        "backend": "cpu",
+        "backend": backend,
         "initial_prompt": "CachyOS, KDE Plasma, Windows, Linux, PyQt6, whisper.cpp, Claude, ChatGPT und Codex.",
         "recording": {"min_duration_ms": 350, "max_duration_s": 300, "silence_threshold_dbfs": -50.0},
         "live": {"enabled": False, "direct_insert": False, "interval_ms": 1500},
@@ -325,6 +376,9 @@ def create_launchers(targets: dict[str, Path], autostart: bool) -> None:
 
 def install(options: dict[str, Any]) -> None:
     model_key = str(options.get("model", "small"))
+    backend = str(options.get("backend", "cpu"))
+    if backend not in {"vulkan", "cpu"}:
+        backend = "cpu"
     autostart = bool(options.get("autostart", True))
     if model_key not in MODELS:
         update(phase="error", error="Unbekanntes Sprachmodell", detail="Installation abgebrochen.")
@@ -357,7 +411,7 @@ def install(options: dict[str, Any]) -> None:
         download(vad_url, targets["models"] / VAD[0], VAD[1], VAD[2], "Spracherkennung", 82, 3)
 
         update(step=5, progress=87, title="Integration wird abgeschlossen", detail="Einstellungen und Autostart werden angelegt …")
-        write_config(targets, filename)
+        write_config(targets, filename, backend)
         create_launchers(targets, autostart)
 
         update(step=6, progress=94, title="Installation wird geprüft", detail="Python-Paket und Engine werden getestet …")
@@ -385,12 +439,12 @@ def install(options: dict[str, Any]) -> None:
 
 HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>WhisperFlow installieren</title><style>
-:root{color-scheme:dark;--bg:#090b12;--card:#121722;--line:#273045;--muted:#96a2b8;--text:#eef2ff;--brand:#7d8dff;--accent:#52ddb2;--danger:#ff7285}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#17203b 0,transparent 36%),radial-gradient(circle at 90% 90%,#14342f 0,transparent 32%),var(--bg);color:var(--text);font:15px/1.5 Inter,Segoe UI,system-ui,sans-serif;min-height:100vh}.shell{max-width:980px;margin:auto;padding:48px 24px}.brand{display:flex;gap:14px;align-items:center;margin-bottom:34px}.logo{width:48px;height:48px;border-radius:15px;background:linear-gradient(145deg,var(--brand),#5965d8);display:grid;place-items:center;box-shadow:0 12px 38px #6577f340}.logo svg{width:28px}.brand h1{font-size:22px;margin:0}.brand p{margin:2px 0 0;color:var(--muted)}.panel{background:#111620e8;border:1px solid var(--line);border-radius:24px;padding:30px;box-shadow:0 28px 90px #0008;backdrop-filter:blur(20px)}h2{font-size:30px;line-height:1.2;margin:0 0 10px}.lead{color:var(--muted);margin:0 0 28px}.models{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0 25px}.model input{position:absolute;opacity:0}.model label{display:block;height:100%;padding:16px 12px;background:#181e2a;border:1px solid #2e374b;border-radius:14px;cursor:pointer;transition:.2s transform,.2s border,.2s background}.model label:hover{transform:translateY(-2px);border-color:#6172d8}.model input:checked+label{background:#20294a;border-color:#8795ff;box-shadow:inset 0 0 0 1px #8795ff}.model b,.model small{display:block}.model small{color:var(--muted);margin-top:5px}.choice{display:flex;align-items:center;gap:10px;color:var(--muted);margin-bottom:25px}.choice input{width:18px;height:18px;accent-color:var(--brand)}button{border:0;border-radius:12px;padding:12px 19px;background:linear-gradient(135deg,#7d8dff,#6170e5);color:#fff;font-weight:700;font-size:15px;cursor:pointer;box-shadow:0 8px 25px #6577f338;transition:.2s transform,.2s opacity}button:hover{transform:translateY(-1px)}button:disabled{opacity:.4;cursor:default;transform:none}.steps{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:28px 0 22px}.step{height:5px;border-radius:4px;background:#242b3b;overflow:hidden}.step.on{background:var(--brand);box-shadow:0 0 16px #7788ff77}.status{display:none}.status.show{display:block;animation:rise .35s ease}.status-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.badge{color:#aeb8cd;background:#202735;border:1px solid #303a50;border-radius:99px;padding:5px 10px;font-size:12px}.progress{height:10px;background:#202633;border-radius:99px;overflow:hidden;margin:20px 0}.bar{height:100%;width:0;background:linear-gradient(90deg,var(--brand),var(--accent));border-radius:inherit;transition:width .45s ease}.detail{color:var(--muted);min-height:24px}.log{margin-top:18px;padding:14px 16px;background:#0c1017;border:1px solid #222a38;border-radius:12px;color:#8793a9;font:12px/1.7 ui-monospace,monospace;max-height:150px;overflow:auto}.error{color:var(--danger);font-weight:650}.done{display:none;grid-template-columns:1fr 1.15fr;gap:22px;align-items:center}.done.show{display:grid;animation:rise .45s ease}.done img{width:100%;border-radius:17px;border:1px solid var(--line);background:#0c1018}.hint{padding:13px 15px;background:#1d2f2d;border:1px solid #2c5a50;border-radius:12px;color:#bcebdd}@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}@media(max-width:760px){.models{grid-template-columns:1fr 1fr}.done.show{grid-template-columns:1fr}.shell{padding:24px 14px}.panel{padding:22px}}
-</style></head><body><main class="shell"><div class="brand"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg></div><div><h1>WhisperFlow</h1><p>Privates Diktat · vollständig lokal</p></div></div><section class="panel" id="setup"><h2>Einmal einrichten. Einfach lossprechen.</h2><p class="lead">Der Installer richtet App, lokale Engine, Sprachmodell und Autostart ein. Audio verlässt dieses Gerät nicht.</p><b>Sprachmodell wählen</b><div class="models">
+:root{color-scheme:dark;--bg:#090b12;--card:#121722;--line:#273045;--muted:#96a2b8;--text:#eef2ff;--brand:#7d8dff;--accent:#52ddb2;--danger:#ff7285}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#17203b 0,transparent 36%),radial-gradient(circle at 90% 90%,#14342f 0,transparent 32%),var(--bg);color:var(--text);font:15px/1.5 Inter,Segoe UI,system-ui,sans-serif;min-height:100vh}.shell{max-width:980px;margin:auto;padding:48px 24px}.brand{display:flex;gap:14px;align-items:center;margin-bottom:34px}.logo{width:48px;height:48px;border-radius:15px;background:linear-gradient(145deg,var(--brand),#5965d8);display:grid;place-items:center;box-shadow:0 12px 38px #6577f340}.logo svg{width:28px}.brand h1{font-size:22px;margin:0}.brand p{margin:2px 0 0;color:var(--muted)}.panel{background:#111620e8;border:1px solid var(--line);border-radius:24px;padding:30px;box-shadow:0 28px 90px #0008;backdrop-filter:blur(20px)}h2{font-size:30px;line-height:1.2;margin:0 0 10px}.lead{color:var(--muted);margin:0 0 28px}.models{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0 25px}.model input{position:absolute;opacity:0}.model label{display:block;height:100%;padding:16px 12px;background:#181e2a;border:1px solid #2e374b;border-radius:14px;cursor:pointer;transition:.2s transform,.2s border,.2s background}.model label:hover{transform:translateY(-2px);border-color:#6172d8}.model input:checked+label{background:#20294a;border-color:#8795ff;box-shadow:inset 0 0 0 1px #8795ff}.model b,.model small{display:block}.model small{color:var(--muted);margin-top:5px}.hwbox{background:#181e2a;border:1px solid #2e374b;border-radius:14px;padding:14px 16px;margin:0 0 22px}.hwbox b{display:block;margin-bottom:4px}.hwbox .lead{margin:0}.hwbox .rec{color:var(--accent)}.choice{display:flex;align-items:center;gap:10px;color:var(--muted);margin-bottom:25px}.choice input{width:18px;height:18px;accent-color:var(--brand)}button{border:0;border-radius:12px;padding:12px 19px;background:linear-gradient(135deg,#7d8dff,#6170e5);color:#fff;font-weight:700;font-size:15px;cursor:pointer;box-shadow:0 8px 25px #6577f338;transition:.2s transform,.2s opacity}button:hover{transform:translateY(-1px)}button:disabled{opacity:.4;cursor:default;transform:none}.steps{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:28px 0 22px}.step{height:5px;border-radius:4px;background:#242b3b;overflow:hidden}.step.on{background:var(--brand);box-shadow:0 0 16px #7788ff77}.status{display:none}.status.show{display:block;animation:rise .35s ease}.status-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.badge{color:#aeb8cd;background:#202735;border:1px solid #303a50;border-radius:99px;padding:5px 10px;font-size:12px}.progress{height:10px;background:#202633;border-radius:99px;overflow:hidden;margin:20px 0}.bar{height:100%;width:0;background:linear-gradient(90deg,var(--brand),var(--accent));border-radius:inherit;transition:width .45s ease}.detail{color:var(--muted);min-height:24px}.log{margin-top:18px;padding:14px 16px;background:#0c1017;border:1px solid #222a38;border-radius:12px;color:#8793a9;font:12px/1.7 ui-monospace,monospace;max-height:150px;overflow:auto}.error{color:var(--danger);font-weight:650}.done{display:none;grid-template-columns:1fr 1.15fr;gap:22px;align-items:center}.done.show{display:grid;animation:rise .45s ease}.done img{width:100%;border-radius:17px;border:1px solid var(--line);background:#0c1018}.hint{padding:13px 15px;background:#1d2f2d;border:1px solid #2c5a50;border-radius:12px;color:#bcebdd}@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}@media(max-width:760px){.models{grid-template-columns:1fr 1fr}.done.show{grid-template-columns:1fr}.shell{padding:24px 14px}.panel{padding:22px}}
+</style></head><body><main class="shell"><div class="brand"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg></div><div><h1>WhisperFlow</h1><p>Privates Diktat · vollständig lokal</p></div></div><section class="panel" id="setup"><h2>Einmal einrichten. Einfach lossprechen.</h2><p class="lead">Der Installer richtet App, lokale Engine, Sprachmodell und Autostart ein. Audio verlässt dieses Gerät nicht.</p><div class="hwbox" id="hwbox"><b id="hwtitle">Dein System wird analysiert …</b><p class="lead" id="hwsummary"></p><p class="lead" id="hwreason"></p></div><b>Sprachmodell wählen</b><div class="models">
 <div class="model"><input id="tiny" name="model" type="radio" value="tiny"><label for="tiny"><b>Tiny</b><small>75 MB<br>maximal schnell</small></label></div><div class="model"><input id="base" name="model" type="radio" value="base"><label for="base"><b>Base</b><small>142 MB<br>schnell</small></label></div><div class="model"><input id="small" name="model" type="radio" value="small" checked><label for="small"><b>Small</b><small>465 MB<br>empfohlen</small></label></div><div class="model"><input id="medium" name="model" type="radio" value="medium"><label for="medium"><b>Medium</b><small>1,5 GB<br>genauer</small></label></div><div class="model"><input id="large" name="model" type="radio" value="large-v3-turbo"><label for="large"><b>Large Turbo</b><small>1,6 GB<br>beste Qualität</small></label></div></div><label class="choice"><input id="autostart" type="checkbox" checked> WhisperFlow bei der Anmeldung starten</label><button id="start">Installation starten</button></section>
 <section class="panel status" id="status"><div class="status-head"><div><h2 id="title">Installation läuft</h2><p class="lead" id="detail"></p></div><span class="badge" id="badge">Schritt 1 von 6</span></div><div class="steps" id="steps"></div><div class="progress"><div class="bar" id="bar"></div></div><div class="log" id="log"></div><p class="error" id="error"></p></section>
 <section class="panel done" id="done"><div><h2>Fertig installiert</h2><p class="lead">Wähle noch dein Mikrofon im Einstellungsfenster. Das Sprachmodell kannst du dort jederzeit wechseln.</p><p class="hint" id="relogin" hidden>Bitte einmal vollständig ab- und wieder anmelden, damit Linux die neuen Eingaberechte übernimmt.</p><button id="close">Installer schließen</button></div><img src="/quickstart.svg" alt="Kurzanleitung: rechte Strg-Taste halten, sprechen, loslassen"></section></main>
-<script>const token='__TOKEN__';const setup=document.querySelector('#setup'),status=document.querySelector('#status'),done=document.querySelector('#done');document.querySelector('#steps').innerHTML='<i class="step"></i>'.repeat(6);document.querySelector('#start').onclick=async()=>{setup.style.display='none';status.classList.add('show');const model=document.querySelector('input[name=model]:checked').value;await fetch('/start?token='+token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,autostart:document.querySelector('#autostart').checked})});poll()};document.querySelector('#close').onclick=async()=>{await fetch('/close?token='+token,{method:'POST'});window.close()};async function poll(){let s=await(await fetch('/status?token='+token)).json();document.querySelector('#title').textContent=s.title;document.querySelector('#detail').textContent=s.detail;document.querySelector('#badge').textContent='Schritt '+s.step+' von 6';document.querySelector('#bar').style.width=s.progress+'%';[...document.querySelectorAll('.step')].forEach((x,i)=>x.classList.toggle('on',i<s.step));document.querySelector('#log').innerHTML=s.log.map(x=>'<div>'+esc(x)+'</div>').join('');document.querySelector('#error').textContent=s.error||'';if(s.done){status.classList.remove('show');done.classList.add('show');document.querySelector('#relogin').hidden=!s.needs_relogin;return}if(s.phase!=='error')setTimeout(poll,700)}function esc(x){let d=document.createElement('div');d.textContent=x;return d.innerHTML}</script></body></html>'''
+<script>const token='__TOKEN__';const setup=document.querySelector('#setup'),status=document.querySelector('#status'),done=document.querySelector('#done');document.querySelector('#steps').innerHTML='<i class="step"></i>'.repeat(6);let recommendedBackend='cpu';async function detectHardware(){try{const h=await(await fetch('/hardware?token='+token)).json();const box=document.querySelector('#hwbox');if(!h.recommendation){document.querySelector('#hwtitle').textContent='Systemerkennung nicht möglich';document.querySelector('#hwsummary').textContent=h.error||'';return}recommendedBackend=h.recommendation.backend;const radio=document.querySelector('input[name=model][value="'+h.recommendation.model+'"]');if(radio)radio.checked=true;document.querySelector('#hwtitle').innerHTML='<span class="rec">Empfohlen: '+h.recommendation.model+'</span> (bereits ausgewählt)';document.querySelector('#hwsummary').textContent=h.recommendation.summary;document.querySelector('#hwreason').textContent=h.recommendation.reason}catch(e){document.querySelector('#hwtitle').textContent='Systemerkennung nicht möglich'}}detectHardware();document.querySelector('#start').onclick=async()=>{setup.style.display='none';status.classList.add('show');const model=document.querySelector('input[name=model]:checked').value;await fetch('/start?token='+token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,backend:recommendedBackend,autostart:document.querySelector('#autostart').checked})});poll()};document.querySelector('#close').onclick=async()=>{await fetch('/close?token='+token,{method:'POST'});window.close()};async function poll(){let s=await(await fetch('/status?token='+token)).json();document.querySelector('#title').textContent=s.title;document.querySelector('#detail').textContent=s.detail;document.querySelector('#badge').textContent='Schritt '+s.step+' von 6';document.querySelector('#bar').style.width=s.progress+'%';[...document.querySelectorAll('.step')].forEach((x,i)=>x.classList.toggle('on',i<s.step));document.querySelector('#log').innerHTML=s.log.map(x=>'<div>'+esc(x)+'</div>').join('');document.querySelector('#error').textContent=s.error||'';if(s.done){status.classList.remove('show');done.classList.add('show');document.querySelector('#relogin').hidden=!s.needs_relogin;return}if(s.phase!=='error')setTimeout(poll,700)}function esc(x){let d=document.createElement('div');d.textContent=x;return d.innerHTML}</script></body></html>'''
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -409,6 +463,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", body)
         elif route == "/quickstart.svg":
             self._send(200, "image/svg+xml", (ROOT / "assets" / "quickstart.svg").read_bytes())
+        elif route == "/hardware" and self._authorized():
+            try:
+                detected = hardware.detect()
+                body = json.dumps({"hardware": detected, "recommendation": recommend_model(detected)}, ensure_ascii=False).encode()
+            except Exception as exc:  # noqa: BLE001 - the UI must stay usable without detection
+                body = json.dumps({"hardware": None, "recommendation": None, "error": str(exc)}, ensure_ascii=False).encode()
+            self._send(200, "application/json", body)
         elif route == "/status" and self._authorized():
             with STATE_LOCK:
                 body = json.dumps(STATE, ensure_ascii=False).encode()

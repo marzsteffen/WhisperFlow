@@ -40,7 +40,9 @@ und eine Anleitung für Aktualisierungen stehen in der
 [Installationsdokumentation](docs/INSTALLATION.md).
 
 Während der Installation kann eines von fünf lokalen Whisper-Modellen gewählt
-werden:
+werden. Der Installer liest zuvor automatisch Grafikkarte, VRAM, RAM und
+Prozessor aus und schlägt das passende Modell für dein System vor — die
+Auswahl bleibt jederzeit frei änderbar:
 
 | Modell | Download | Eignung |
 |---|---:|---|
@@ -51,7 +53,9 @@ werden:
 | Large v3 Turbo | 1,6 GB | beste Qualität, benötigt mehr Leistung |
 
 Alle Downloads sind auf feste Versionen gepinnt und werden vor der Übernahme
-mit Größe und SHA-256 geprüft. Die App-Abhängigkeiten liegen in einer eigenen
+mit Größe und SHA-256 geprüft. Ein unterbrochener Download wird automatisch
+fortgesetzt und nach einem Installer-Abbruch beim nächsten Start an derselben
+Stelle wieder aufgenommen. Die App-Abhängigkeiten liegen in einer eigenen
 Python-Umgebung und verändern keine bereits vorhandenen Python-Pakete.
 
 ## Bedienung

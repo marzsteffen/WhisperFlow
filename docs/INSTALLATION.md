@@ -15,7 +15,6 @@ das gewählte Whisper-Modell und auf Wunsch den Autostart ein.
 
 Andere CPU-Architekturen, macOS, X11 und Linux ohne PipeWire werden vom
 Ein-Klick-Installer derzeit nicht unterstützt.
-
 ## Windows
 
 1. Repository herunterladen oder klonen.
@@ -74,6 +73,49 @@ Installierte Pfade:
 `XDG_DATA_HOME` und `XDG_CONFIG_HOME` werden für App-Daten beziehungsweise
 Konfiguration berücksichtigt. Der Installationsordner der Python-Umgebung
 bleibt unabhängig davon unter `~/.local/share/whisperflow`.
+
+## Automatische Modell-Empfehlung
+
+Bevor das Sprachmodell gewählt wird, liest der Installer die Hardware aus und
+schlägt ein passendes Modell vor, das bereits vorausgewählt ist. Die Auswahl
+bleibt jederzeit frei änderbar.
+
+Gelesen werden auf Windows Grafikkarte und VRAM aus der Registry
+(`HardwareInformation.qwMemorySize`), der Arbeitsspeicher über
+`GlobalMemoryStatusEx` sowie Prozessor und Kernanzahl; `nvidia-smi` dient als
+Ergänzung für den VRAM-Wert. Auf Linux stammen die Werte aus `sysfs`
+(`/sys/class/drm`) bzw. `nvidia-smi`, `/proc/meminfo` und `/proc/cpuinfo`.
+Es werden keine Daten übertragen; die Auswertung läuft vollständig lokal.
+
+Die Empfehlung orientiert sich am verfügbaren Speicher:
+
+| Situation | Empfehlung | Backend |
+|---|---|---|
+| Dedizierte GPU mit mindestens 5 GB VRAM | Large v3 Turbo | Vulkan |
+| Dedizierte GPU mit mindestens 3 GB VRAM | Medium | Vulkan |
+| Dedizierte GPU mit mindestens 2 GB VRAM | Small | Vulkan |
+| Integrierte Grafik, 8 GB RAM oder mehr | Small bzw. Base | Vulkan (gemeinsamer Speicher) |
+| Ohne GPU-Beschleunigung, 16 GB RAM oder mehr | Small | CPU |
+| Ohne GPU-Beschleunigung, 8 GB RAM oder mehr | Base | CPU |
+| Weniger Arbeitsspeicher | Tiny | CPU |
+
+Bei sehr wenig VRAM einer dedizierten Karte fällt die Empfehlung auf die CPU
+zurück. Schlägt die Systemanalyse fehl, bleibt Small vorausgewählt. Das
+gewählte Backend wird in die `config.json` geschrieben und lässt sich später
+im Einstellungsfenster ändern; scheitert Vulkan dort, weicht WhisperFlow
+automatisch auf die CPU aus.
+
+## Unterbrochene Downloads
+
+Download von Engine und Modellen laufen mit automatischer Fortsetzung: Bei
+einem Verbindungsabbruch macht der Installer bis zu fünf Versuche mit
+steigender Wartezeit und fragt fehlende Daten per HTTP-Range-Anfrage nach,
+statt von vorn zu beginnen. Der Status zeigt die Fortsetzung an, zum Beispiel
+„Verbindung unterbrochen – Download wird bei 247 MB fortgesetzt …". Bricht der
+Installer ganz ab, bleibt die teilweise geladene `.part`-Datei liegen und ein
+erneuter Installer-Start nimmt den Download an derselben Stelle wieder auf.
+Korrupte Teildateien werden verworfen; jede abgeschlossene Datei wird vor der
+Übernahme erneut per SHA-256 geprüft.
 
 ## Was der Installer prüft
 
