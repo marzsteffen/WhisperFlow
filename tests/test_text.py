@@ -37,6 +37,7 @@ def test_requires_text():
         "Lia Noa",
         "Lia-Noa",
         "Lianua",
+        "Leonor",
     ),
 )
 def test_lianoa_transcription_variants_use_exact_brand_spelling(variant: str):

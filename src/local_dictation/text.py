@@ -13,7 +13,10 @@ _REPLACED_CATEGORIES = frozenset({"Cc", "Zl", "Zp"})
 # German prose or another person's name.
 _TERM_CORRECTIONS = (
     (
-        re.compile(r"(?<!\w)lia[\s\u00a0-]*n(?:oah?|ua)(?!\w)", re.IGNORECASE),
+        re.compile(
+            r"(?<!\w)(?:lia[\s\u00a0-]*n(?:oah?|ua)|leonor)(?!\w)",
+            re.IGNORECASE,
+        ),
         "LiaNoa",
     ),
     (
